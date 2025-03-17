@@ -102,7 +102,7 @@ class OcclusionPredictor():
         
         kg = PedOccludedKGV4(self.settings)
         
-        self.model = restore_model(model_name_path="outputs/models/"+self.settings['model_name'])
+        self.model = restore_model(model_name_path="models/"+self.settings['model_name'])
         
         self.model.calibrate(kg.X_train, 
                 X_neg=None, 
@@ -115,13 +115,13 @@ class OcclusionPredictor():
 
     
     def load_base_predictions(self):
-        file_results_frame = 'outputs/map.csv'
-        f_1 = open(file_results_frame, 'w', encoding='UTF8')
-        writer_results_frame = csv.writer(f_1)
-        writer_results_frame.writerow(["Feature","Ped Occluded", "Ped Not Occluded","None Ped"])
+        #file_results_frame = 'outputs/map.csv'
+        #f_1 = open(file_results_frame, 'w', encoding='UTF8')
+        #writer_results_frame = csv.writer(f_1)
+        #writer_results_frame.writerow(["Feature","Ped Occluded", "Ped Not Occluded","None Ped"])
         self.base_probs = load_base_predictions_v4(self)
         
-        f_1.close()
+        #f_1.close()
 
     def evaluate_triple(self, triple):
         triple_score = self.model.predict_proba(triple) 
@@ -146,10 +146,10 @@ class OcclusionPredictor():
             return 2
         
     def include_veh_v4(self, evidence, eviHyp_ped_occluded, eviHyp_none_ped, vehicle,vehicle_data):
-        state = vehicle.find("state").text
-        braking_lights = vehicle.find("braking_ligths").text
-        distance = vehicle.find("distance").text
-        position = vehicle.attrib["label"]
+        state =vehicle[0]
+        braking_lights = vehicle[1]
+        distance = vehicle[2]
+        position = vehicle[3]
         #State
         evidence.append(self.base_probs[ontology.EVIDENCE][state])
         eviHyp_ped_occluded.append(self.base_probs[ontology.EVIDENCE_HYPHOTESIS_OCCLUDED_PED][state])
@@ -197,12 +197,7 @@ class OcclusionPredictor():
         #VEHICLES
         if len(vehicles) >0:
             for vehicle in vehicles:
-                if self.settings['version_kg'] == 1 or self.settings['version_kg'] == 3:
-                    evidence, eviHyp_ped_not_occluded, eviHyp_none_ped_score, vehicle_data = self.include_veh_v1(evidence, eviHyp_ped_occluded, eviHyp_ped_not_occluded, eviHyp_none_ped, vehicle, vehicle_data)
-                elif self.settings['version_kg'] == 4 or self.settings['version_kg'] == 5:
-                    evidence, eviHyp_ped_occluded, eviHyp_none_ped, vehicle_data = self.include_veh_v4(evidence, eviHyp_ped_occluded, eviHyp_none_ped, vehicle, vehicle_data)
-                else:
-                    evidence, eviHyp_ped_not_occluded, eviHyp_none_ped_score, vehicle_data = self.include_veh_v2(evidence, eviHyp_ped_occluded, eviHyp_ped_not_occluded, eviHyp_none_ped, vehicle, vehicle_data)
+                evidence, eviHyp_ped_occluded, eviHyp_none_ped, vehicle_data = self.include_veh_v4(evidence, eviHyp_ped_occluded, eviHyp_none_ped, vehicle, vehicle_data)
         else:
             evidence.append(self.base_probs[ontology.EVIDENCE][ontology.ISOLATED])
             eviHyp_ped_occluded.append(self.base_probs[ontology.EVIDENCE_HYPHOTESIS_OCCLUDED_PED][ontology.ISOLATED])

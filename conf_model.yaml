@@ -1,0 +1,64 @@
+# MODEL PARAMETERS
+k: 100
+eta: 10
+scoring_type: 'ComplEx' #TransE ComplEx
+seed: 0
+lr: 0.0005 # 0.0005
+
+#TRAINNING PARAMETERS
+batch: 10000
+epochs: 10000
+model_name: 'PedOccludedKG_v4_04_carla'
+
+#KG
+machine : 'UAH'
+UAH:  
+  annotations_path: '/home/angie-melo/Documents/DataSets/PedOccluded/annotations/'
+  videos_path: '/home/angie-melo/Documents/DataSets/PedOccluded/videos/'
+  videos_test: '/home/angie-melo/Documents/DataSets/PedOccluded/annotations/all_re.txt'
+DGX:  
+  annotations_path: '/media/14TBDISK/angie/OccludedPed/annotations/'
+  videos_path: '/media/14TBDISK/angie/OccludedPed/videos/'
+  videos_test: '/media/14TBDISK/angie/OccludedPed/annotations/test.txt'
+LOCAL:  
+  annotations_path: '/home/nataly/Documents/PHD/datasets/PedOccluded/annotations/'
+  videos_path: '/home/nataly/Documents/PHD/datasets/PedOccluded/videos/'
+  videos_test: '/home/nataly/Documents/PHD/datasets/PedOccluded/annotations/test.txt'
+
+#videos_train: ['video_001','video_002','video_003','video_004','video_005','video_006','video_007','video_008','video_009','video_010','video_011','video_012'
+#              , 'video_013', 'video_014', 'video_016', 'video_020', 'video_021', 'video_022', 'video_023', 'video_024', 'video_025', 'video_026',
+#               'video_027', 'video_029', 'video_030', 'video_032', 'video_033', 'video_034', 'video_035', 'video_036'
+#               , 'video_037', 'video_039']
+
+#videos_train: ['video_001','video_002','video_003','video_004','video_005','video_006','video_007','video_008','video_009','video_010','video_011','video_012'
+#              , 'video_013', 'video_014', 'video_016', 'video_020', 'video_021', 'video_022', 'video_023', 'video_024', 'video_025', 'video_026',
+#               'video_027', 'video_029', 'video_030', 'video_032', 'video_033', 'video_034', 'video_035', 'video_036'
+#               , 'video_037', 'video_039',
+#              'video_041','video_042','video_043','video_044','video_047','video_048','video_049','video_050','video_051','video_052','video_053','video_054'
+#              , 'video_056', 'video_057', 'video_058', 'video_059', 'video_060', 'video_061', 'video_062', 'video_063', 'video_064', 'video_065',
+#               'video_066', 'video_067', 'video_069', 'video_070', 'video_071', 'video_072', 'video_073', 'video_075'
+#               ,'video_076','video_077','video_078','video_079','video_080','video_081','video_082','video_083','video_085','video_086'
+#               ,'video_087','video_089','video_090','video_091','video_092','video_094','video_096','video_097','video_098','video_099']
+
+videos_train: ['video_041','video_042','video_043','video_044','video_047','video_048','video_049','video_050','video_051','video_052','video_053','video_054'
+              , 'video_056', 'video_057', 'video_058', 'video_059', 'video_060', 'video_061', 'video_062', 'video_063', 'video_064', 'video_065',
+               'video_066', 'video_067', 'video_069', 'video_070', 'video_071', 'video_072', 'video_073', 'video_075', 'video_092', 'video_076', 'video_077','video_078'
+               #, 'video_079', 'video_080',
+               # 'video_082', 'video_083', 'video_085', 'video_086',
+               #'video_087', 'video_089', 'video_090', 'video_091', 'video_081', 'video_094', 'video_096', 'video_097', 'video_098', 'video_099'
+               ]
+
+#videos_train: ['video_015','video_017','video_018','video_019','video_028','video_031','video_038','video_040']
+
+
+version_kg: 4
+accumulated_frames_prediction : 0
+extracted_csv: False
+
+#TESTING
+positive_base_rate: 0.70
+epochs_calibration: 30
+
+# UAH videos_test: ''
+video_test: 'video_018'
+print_video: True

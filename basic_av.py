@@ -932,7 +932,7 @@ def game_loop(settings):
                                                 brake=0.64, gear = 0, manual_gear_shift = 1))
 
             control = agent.run_step()
-            control.manual_gear_shift = False
+            #control.manual_gear_shift = False
             world.ego_vehicle.apply_control(control)
 
             # CALCULATE THE REACTION TIME
