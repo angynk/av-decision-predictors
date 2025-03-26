@@ -23,7 +23,11 @@ import sys
 import time
 import weakref
 import yaml
+import cv2
 from yaml.loader import SafeLoader
+
+from occlusion_predictor import OcclusionPredictor
+from ultralytics import YOLO
 
 try:
     import pygame
@@ -109,6 +113,240 @@ def get_actor_blueprints(world, filter, generation):
         print("   Warning! Actor Generation is not valid. No actor will be spawned.")
         return []
 
+
+# ==============================================================================
+# -- Custom Agent Pedestrian Occluded ------------------------------------------
+# ==============================================================================
+class CustomAgent(BasicAgent):
+    def __init__(self, vehicle, settings,model_conf, tm):
+        self.ego_vehicle = vehicle
+        self.settings = settings
+        self.reaction_time = self.settings['ENHANCED_VEH']['REACTION_TIME']  # AV reaction time (in seconds)
+        self.safe_deceleration = self.settings['ENHANCED_VEH']['SAFE_DECELERATING']   # Maximum comfortable deceleration (m/s²)
+        self.safe_distance_margin = self.settings['ENHANCED_VEH']['SAFE_DISTANCE_MARGIN']   # Extra safe stopping distance (meters)
+        self.k_risk = self.settings['ENHANCED_VEH']['OCCLUSION_SENSITIVY']   # Occlusion sensitivity factor
+        self.occlusion_predictor = OcclusionPredictor(model_conf)
+        self.scenario = self.settings['SCENARIO'] 
+        self.prev_speed = 0.0  # Previous speed in m/s
+        self.prev_time = time.time()  # Previous timestamp
+        self.prob_occlusion = []
+        self.deceleration = None
+        self.tm= tm
+        self.car_decisions = []
+        self.model = YOLO("yolov8n.pt") 
+
+
+    def get_vehicle_speed(self, vehicle):
+        velocity = vehicle.get_velocity()
+        #return 3.6*math.sqrt(velocity.x**2 + velocity.y**2 +velocity.z**2)
+        return 3.6*math.sqrt(velocity.x**2 + velocity.y**2 +velocity.z**2)
+    
+    def get_acceleration(self, current_speed):
+        """Compute acceleration based on speed change"""
+        current_time = time.time()
+        dt = current_time - self.prev_time  # Time difference
+
+        if dt == 0:
+            return 0.0  # Avoid division by zero
+
+        acceleration = (current_speed - self.prev_speed) / dt
+
+        # Update previous values for next computation
+        self.prev_speed = current_speed
+        self.prev_time = current_time
+
+        return acceleration
+    
+    def compute_braking_distance(self, speed): 
+        """ Compute braking distance based on physics equations """
+        reaction_distance = speed * self.reaction_time
+        stopping_distance = (speed ** 2) / (2 * self.safe_deceleration)
+        return reaction_distance + stopping_distance
+    
+    def adjust_speed_based_on_occlusion(self, speed, distance, vf=0): #vf = 0 means fully stop vehicle -> kinematic equation
+        """ Adjust speed dynamically based on pedestrian occlusion probability """
+        #return speed * (1 - self.k_risk * occlusion_prob)
+        if distance <= 0:
+            #raise ValueError("Distance must be greater than 0")
+            return speed
+
+        if speed**2 < 2 * abs(vf**2) / distance:
+            raise ValueError("Deceleration too high for the given distance")
+
+        # Compute required acceleration
+        a = (vf**2 - speed**2) / (2 * distance)
+        #a = -7
+        #a = max(a, -3)
+
+        # Compute target speed (if needed)
+        target_speed = math.sqrt(max(speed**2 + 2 * a * distance, 0))
+
+        return a, target_speed
+
+    def calculate_required_speed(self, initial_speed, stop_distance, max_deceleration=-3.0):
+        """
+        Calcula la velocidad objetivo para que el vehículo se detenga en una distancia dada.
+
+        :param initial_speed: Velocidad actual en m/s.
+        :param stop_distance: Distancia en metros donde debe detenerse.
+        :param max_deceleration: Aceleración máxima permitida (negativa).
+        :return: Velocidad objetivo en m/s.
+        """
+        # Evitar divisiones por cero o valores negativos de distancia
+        if stop_distance <= 0:
+            return 0.0
+
+        # Calcular la aceleración necesaria para detenerse
+        required_acceleration = - (initial_speed ** 2) / (2 * stop_distance)
+
+        # Limitar la aceleración dentro del rango permitido
+        acceleration = max(required_acceleration, max_deceleration)
+
+        # Calcular la velocidad objetivo
+        target_speed = (initial_speed ** 2 + 2 * acceleration * stop_distance) ** 0.5
+
+        return max(target_speed, 0.0) 
+
+    def get_vehicle_state(self, vehicle_occl):
+        """Determine if the vehicle is accelerating, decelerating, stopped, or maintaining speed"""
+        speed = self.get_vehicle_speed(vehicle_occl)
+        acceleration = self.get_acceleration(speed)
+
+        if speed < 0.1:
+            return "Stopped" , "off"
+        elif acceleration > 0.1:
+            return "Acelerating", "off"
+        elif acceleration < -0.1:
+            return "Decelerating", "on"
+        else:
+            return "ContiniousMovement", "off"
+        
+    def get_vehicle_distance_value (self, vehicle_occl):
+        distance_to_occl_vehicle = self.ego_vehicle.get_location().distance(vehicle_occl.get_location())
+        if  distance_to_occl_vehicle > 0.5 and distance_to_occl_vehicle <= 3.8:
+            return 'NearToEgoVeh'
+        elif distance_to_occl_vehicle > 3.8 and distance_to_occl_vehicle <= 6:
+            return 'MiddleDisToEgoVeh'
+        else:
+            return 'FarToEgoVeh'
+    
+    def get_occlusion_prediction(self, vehicle_occl):
+        state, braking_ligths = self.get_vehicle_state(vehicle_occl)
+        distance = self.get_vehicle_distance_value(vehicle_occl)
+        vehicle_occl_data = [state, braking_ligths, distance, self.settings[self.scenario]["OCCL_POSITION"]]
+        prediction, probabilities, vehicle_data = self.occlusion_predictor.predict_scene(self.settings[self.scenario]["ZEBRA_CROSSING"], 
+                                                                                         self.settings[self.scenario]["LANES"], self.settings[self.scenario]["SURROUNDINGS"], [vehicle_occl_data])
+        #print("VEHICLE OCCLUDED: "+state+", "+braking_ligths+", "+distance+" ->"+prediction+": "+str(probabilities[0]))
+        return probabilities[0]
+
+
+    def run_step(self, image_data, vehicle_occl, ped_cross):
+        detected_pedestrian = False
+        if ped_cross != 3:
+            if image_data is not None:
+                results = self.model(image_data, verbose=False)
+                for result in results:
+                    for box in result.boxes:
+                        cls = int(box.cls[0])  # Class index
+                        confidence = box.conf[0].item()
+
+                        if cls == 0 and confidence > 0.60:  # Class 0 = Person in COCO dataset
+                            detected_pedestrian = True
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
+                            image_data = np.ascontiguousarray(image_data, dtype=np.uint8)
+                            cv2.rectangle(image_data, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(image_data, "Pedestrian", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                #cv2.imshow("CARLA Camera", image_data)
+                #
+                # 
+                # cv2.waitKey(1)
+            # Get current vehicle speed
+        speed = self.get_vehicle_speed(self.ego_vehicle)
+
+        if ped_cross == 3 or ped_cross == 0:
+            self.ego_vehicle.set_autopilot(True, self.tm.get_port())
+
+
+        control = carla.VehicleControl()
+        target_speed = self.settings[self.scenario]["EGO_SPEED"]
+        
+        # TAKE CAR DECISION
+        if detected_pedestrian and ped_cross != 3:
+            ped_cross = 1 
+
+        if ped_cross == 1 and speed > 1:
+            distance_to_occluded_car = self.ego_vehicle.get_location().distance(vehicle_occl.get_location())
+            target_deceleration, target_speed = self.adjust_speed_based_on_occlusion(speed/3.6, distance_to_occluded_car - 3)
+            stop_distance_moderate_braking = ((speed/3.6) ** 2) / (2 * abs(target_deceleration))
+            brake = abs(target_deceleration)/8
+            decision = {"decision": "BRAKING", "Explanation": "PEDESTRIAN OCCLUDED", "brake": brake, "throttle": 0.0, "gear": 0, "steer": 0.0, "manual_gear": 1, "auto_pilot": False ,"speed": speed }
+            self.car_decisions.append(decision)
+            ped_cross = 2
+            self.ego_vehicle.set_autopilot(False, self.tm.get_port())
+        elif ped_cross == 2 :
+            decision = self.car_decisions[len(self.car_decisions)-1]
+            decision['speed'] = speed
+            self.car_decisions.append(decision)
+        elif ped_cross == 0 or ped_cross == 3:
+            if speed < (target_speed + 0.78): 
+                decision = {"decision": "ACCELERATE", "Explanation": "FREE MOVEMENT", "brake": 0.0, "throttle": min(1.0, ((target_speed + 0.78)/3.6 - speed/3.6) * 2.0),
+                                             "steer": 0.0, "auto_pilot": True, "gear": None,"speed": speed }
+                self.car_decisions.append(decision)
+            else:
+                decision = {"decision": "BRAKING", "Explanation": "REACH SPEED LIMIT", "brake": min(1.0, ((target_speed + 0.78)/3.6 - speed/3.6) * 2.0), 
+                                           "throttle": 0.0,
+                                             "steer": 0.0, "auto_pilot": True , "gear": None,"speed": speed }
+                self.car_decisions.append(decision)
+        else:
+            decision = {"decision": "STOP", "Explanation": "REACH SPEED LIMIT", "brake": 0.0, 
+                                           "throttle": 0.0,
+                                             "steer": 0.0, "auto_pilot": True , "gear": None,"speed": speed }
+        
+        
+        
+        
+        control.throttle = decision['throttle']
+        control.brake = decision['brake']
+        control.steer = decision['steer']
+        if decision['gear'] is not None:
+            control.gear = decision['gear']
+            control.manual_gear_shift = decision["manual_gear"]
+
+
+        #print("S:"+str(speed)+" T:"+str(target_speed)+" PRED:"+str(occlusion_prob))
+        print(decision)
+        # Adjust speed if occlusion is detected
+        '''if occlusion_prob >= self.settings["ENHANCED_VEH"]["OCCLUSION_SENSITIVY"]:
+            target_speed = self.adjust_speed_based_on_occlusion(speed, distance_to_pedestrian)
+            #CALCULATE THE DESIRED SPEED IF I WANT THAT THE CAR STOP IN A DESIRED DISTANCE
+        else:
+            target_speed = ((self.settings[self.scenario]["EGO_SPEED"] + 0.78)/3.6 - speed/3.6) * 2.0
+
+        print(str(target_speed))
+        # Actions to take during each simulation step
+        control = carla.VehicleControl()
+
+        if distance_to_pedestrian > safe_stopping_distance:
+
+            if speed < (self.settings[self.scenario]["EGO_SPEED"] + 0.78) :
+
+                control.throttle = max(0.2, min(1.0, target_speed))
+                control.brake = 0.0
+                control.steer = 0.0
+            
+            else:
+                # Apply braking if too close to pedestrian
+                control.brake = min(1.0, (safe_stopping_distance - braking_distance) / 10)
+                control.throttle = 0.0
+                print("🚨 Braking to avoid pedestrian!")
+        else:
+            control.throttle = 0.0
+            control.brake = 0.64
+        '''
+
+        return control, ped_cross
+
+
 # ==============================================================================
 # -- World ---------------------------------------------------------------
 # ==============================================================================
@@ -141,6 +379,7 @@ class World(object):
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
         self.recording_start = 0
+        self.image_data = None
         
 
     def restart(self, settings, scenario):
@@ -162,22 +401,14 @@ class World(object):
             spawn_point_ego_veh.rotation.pitch = 0.0
             self.destroy()
             self.ego_vehicle = self.world.try_spawn_actor(blueprint, spawn_point_ego_veh)
-            #self.modify_vehicle_physics(self.ego_vehicle)
+            self.modify_vehicle_physics(self.ego_vehicle)
 
-            
 
         # EGO VEHICLE DEFINITION
-        spawn_points = self.map.get_spawn_points()
-        #spawn_point_ego_veh = random.choice(spawn_points) if spawn_points else carla.Transform()
-        #print(spawn_point_ego_veh) #(x=131.690018, y=109.400040, z=0.500000)
         spawn_point_ego_veh = carla.Transform(carla.Location(x=settings[scenario]['EGO_X'], y=settings[scenario]['EGO_Y'], z=settings[scenario]['EGO_Z']), carla.Rotation(yaw=settings[scenario]['EGO_YAW']))
         self.ego_vehicle = self.world.try_spawn_actor(blueprint, spawn_point_ego_veh)
         self.ego_vehicle.set_autopilot(True)            
         #self.modify_vehicle_physics(self.ego_vehicle)
-            
-        waypoint = self.map.get_waypoint(self.ego_vehicle.get_location(), project_to_road=False, lane_type=carla.LaneType.Sidewalk)
-        if waypoint is not None:
-            print(waypoint)
 
         # OCCLUDED VEHICLE DEFINITION
         spawn_point_occ_veh = carla.Transform(carla.Location(x=settings[scenario]['OCC_X'], y=settings[scenario]['OCC_Y'], z=settings[scenario]['OCC_Z']), carla.Rotation(yaw=settings[scenario]['OCC_YAW']))
@@ -191,8 +422,8 @@ class World(object):
         spawn_point_ped = carla.Transform(carla.Location(x=settings[scenario]['WALKER_X'], y=settings[scenario]['WALKER_Y'], z=settings[scenario]['WALKER_Z']), carla.Rotation(yaw=settings[scenario]['WALKER_YAW'])) 
         self.pedestrian = self.world.try_spawn_actor(walker, spawn_point_ped)
 
-        self.world.wait_for_tick()
-        
+        #self.world.wait_for_tick()
+        self.world.tick()
 
         # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.ego_vehicle, self.hud)
@@ -211,7 +442,9 @@ class World(object):
         #img[:,:,3] = 255 #Setting the alpha to 255 
         data_dict['rgb_image'] = img
         i3 = img[:, :, :3]
+        self.image_data = i3
         i3 = i3[:, :, ::-1]  # Convert from BGR to RGB
+        
 
         surface = pygame.surfarray.make_surface(i3.swapaxes(0, 1))
 
@@ -836,19 +1069,16 @@ def save_images_to_disk(output_dir, images):
 
 
 def calculate_jerk(accel, acceleration_log, jerk_log):
-    acceleration = math.sqrt(accel.x**2 + accel.y**2 + accel.z**2)
+    acceleration = np.linalg.norm([accel.x, accel.y, accel.z])
     acceleration_log.append((time.time(), acceleration))
     if len(acceleration_log) > 1:
         t1, a1 = acceleration_log[-2]
         t2, a2 = acceleration_log[-1]
         jerk = (a2 - a1) / (t2 - t1) if (t2 - t1) > 0 else 0
-
-        if jerk >80:
-            print("what")
         jerk_log.append(jerk)
     return acceleration_log, jerk_log
 
-def game_loop(settings):
+def game_loop(settings, conf_model):
     """
     Main loop of the simulation. It handles updating all the HUD information,
     ticking the agent and, if needed, the world.
@@ -869,6 +1099,12 @@ def game_loop(settings):
         traffic_manager = client.get_trafficmanager()
         sim_world = client.get_world()
 
+        world_settings = sim_world.get_settings()
+        world_settings.synchronous_mode = True
+        world_settings.fixed_delta_seconds = 0.05
+        sim_world.apply_settings(world_settings)
+        traffic_manager.set_synchronous_mode(True)
+
 
         display = pygame.display.set_mode(
             (settings['WIDTH'], settings['HEIGHT']),
@@ -879,17 +1115,7 @@ def game_loop(settings):
         controller = KeyboardControl(world)
 
 
-        if settings[scenario]['EGO_AGENT'] == "Basic":
-            agent = BasicAgent(world.ego_vehicle, settings[scenario]['EGO_SPEED'])
-            agent.follow_speed_limits(True)
-        elif settings[scenario]['EGO_AGENT'] == "Constant":
-            agent = ConstantVelocityAgent(world.ego_vehicle, settings[scenario]['EGO_SPEED']+10)
-            ground_loc = world.world.ground_projection(world.ego_vehicle.get_location(), 5)
-            if ground_loc:
-                world.ego_vehicle.set_location(ground_loc.location + carla.Location(z=0.01))
-            agent.follow_speed_limits(True)
-        elif settings[scenario]['EGO_AGENT'] == "Behavior":
-            agent = BehaviorAgent(world.ego_vehicle, behavior="cautious") #normal,aggressive , cautious
+        agent = CustomAgent(world.ego_vehicle, settings, conf_model, traffic_manager)
 
 
         camera_bp = sim_world.get_blueprint_library().find('sensor.camera.rgb') 
@@ -914,12 +1140,14 @@ def game_loop(settings):
                               'peak-jerk': None}
         acceleration_log = []
         jerk_log=[]
+        ped_cross = 0
         
         clock = pygame.time.Clock()
 
         while True:
             clock.tick(20)
-            world.world.wait_for_tick()
+            world.world.tick()
+            #world.world.wait_for_tick()
             if controller.parse_events():
                 return
 
@@ -927,6 +1155,9 @@ def game_loop(settings):
             world.render(display)
             pygame.display.flip()
 
+            
+
+            distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
             v_2 = world.occ_vehicle.get_velocity()
             occ_veh_speed = 3.6*math.sqrt(v_2.x**2 + v_2.y**2 +v_2.z**2)
 
@@ -950,14 +1181,12 @@ def game_loop(settings):
             else:
                 world.occ_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0,
                                                     brake=0.64, gear = 0, manual_gear_shift = 1))
-            
 
-            control = agent.run_step()
+            control, ped_cross = agent.run_step(world.image_data, world.occ_vehicle, ped_cross)
             #control.manual_gear_shift = False
             world.ego_vehicle.apply_control(control)
 
             # CALCULATE THE REACTION TIME
-            #Euro NCAP and NHTSA safety tests consider 20–30 meters as a typical range for pedestrian detection and emergency braking at urban speeds
             distance_to_pedestrian_ego_veh = world.ego_vehicle.get_location().distance(world.pedestrian.get_location())
             if distance_to_pedestrian_ego_veh <= settings['DETECTION_THRESHOLD'] and start_reaction_time is None:
                 start_reaction_time = time.time()
@@ -979,12 +1208,6 @@ def game_loop(settings):
             else:
                 ttc = float('inf')
 
-            '''if ttc < 2:
-                print("COllision detected "+str(ttc))
-
-            if ttc > 5.0:
-                print("avoided collision")'''
-
             if ttc < min_ttc:
                 min_ttc = ttc
                 experiment_results['ttc'] = min_ttc
@@ -997,19 +1220,20 @@ def game_loop(settings):
                 if world.ego_vehicle.get_location().x <= settings[scenario]['WALKER_X'] :
                     acceleration_log, jerk_log = calculate_jerk(world.ego_vehicle.get_acceleration(), acceleration_log, jerk_log)
 
+
             #print("D:"+ str(distance_to_cross_occ_veh)+" - V:"+str(occ_veh_speed))
-                
+            
             if occ_veh_speed < settings[scenario]['VEL_TO_WALKER_START'] and value_control_ped:
                 
                 walker_control = carla.WalkerControl()
-                walker_control.direction = carla.Vector3D(-1.0, 0.0, 0.0) 
+                walker_direction = settings[scenario]['WALKER_DIRECTION']
+                walker_control.direction = carla.Vector3D(walker_direction[0], walker_direction[1], walker_direction[2]) 
                 walker_control.speed = settings[scenario]['WALKER_SPEED']
                 world.pedestrian.apply_control(walker_control)
+                if world.pedestrian.get_location().distance(carla.Location(x= settings[scenario]['WALKER_X_2'], y= settings[scenario]['WALKER_Y_2'], z= settings[scenario]['WALKER_Z_2'])) < 0.30:
+                    ped_cross = 3
 
-
-
-
-            
+    
 
     finally:
 
@@ -1039,6 +1263,10 @@ def game_loop(settings):
 def main():
     with open('scenarios.yaml') as f:
         settings = yaml.load(f, Loader=SafeLoader)
+
+
+    with open('conf_model.yaml') as f:
+        conf_model = yaml.load(f, Loader=SafeLoader)
     
     log_level = logging.INFO
     logging.basicConfig(format='%(levelname)s: %(message)s', level=log_level)
@@ -1046,7 +1274,7 @@ def main():
     print(__doc__)
 
     try:
-        game_loop(settings)
+        game_loop(settings, conf_model)
 
     except KeyboardInterrupt:
         print('\nCancelled by user. Bye!')

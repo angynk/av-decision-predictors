@@ -2,3 +2,6 @@ INFO - Fingerprint not found. Saved model loading will continue.
 INFO - Fingerprint not found. Saved model loading will continue.
 INFO - Fingerprint not found. Saved model loading will continue.
 INFO - Fingerprint not found. Saved model loading will continue.
+INFO - FakeTensor cache stats:
+INFO -   cache_hits: 0
+INFO -   cache_misses: 0
