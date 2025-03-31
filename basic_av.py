@@ -173,7 +173,7 @@ class World(object):
         spawn_point_ego_veh = carla.Transform(carla.Location(x=settings[scenario]['EGO_X'], y=settings[scenario]['EGO_Y'], z=settings[scenario]['EGO_Z']), carla.Rotation(yaw=settings[scenario]['EGO_YAW']))
         self.ego_vehicle = self.world.try_spawn_actor(blueprint, spawn_point_ego_veh)
         self.ego_vehicle.set_autopilot(True)            
-        #self.modify_vehicle_physics(self.ego_vehicle)
+        self.modify_vehicle_physics(self.ego_vehicle)
             
         waypoint = self.map.get_waypoint(self.ego_vehicle.get_location(), project_to_road=False, lane_type=carla.LaneType.Sidewalk)
         if waypoint is not None:
@@ -199,6 +199,7 @@ class World(object):
         self.lane_invasion_sensor = LaneInvasionSensor(self.ego_vehicle, self.hud)
         self.gnss_sensor = GnssSensor(self.ego_vehicle)
         self.imu_sensor = ImuSensor(self.ego_vehicle)
+        #self.obstacle_sensor = ObstacleSensor(self.ego_vehicle, self.hud)
         self.camera_manager = CameraManager(self.ego_vehicle, self.hud)
         self.camera_manager.transform_index = cam_pos_id
         self.camera_manager.set_sensor(cam_index, notify=False)
@@ -575,6 +576,30 @@ class CollisionSensor(object):
         self.collision = True
         self.intensity = intensity
 
+
+class ObstacleSensor(object):
+
+    def __init__(self, parent_actor, hud):
+        self.sensor = None
+        self.history = []
+        self._parent = parent_actor
+        self.hud = hud
+        world = self._parent.get_world()
+        blueprint = world.get_blueprint_library().find('sensor.other.obstacle')
+        self.sensor = world.spawn_actor(blueprint, carla.Transform(), attach_to=self._parent)
+        # We need to pass the lambda a weak reference to
+        # self to avoid circular reference.
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda event: ObstacleSensor._on_obstacle(weak_self, event))
+
+    @staticmethod
+    def _on_obstacle(weak_self, event):
+        self = weak_self()
+        print("OBSTACLE")
+
+
+        
+
 # ==============================================================================
 # -- LaneInvasionSensor --------------------------------------------------------
 # ==============================================================================
@@ -848,6 +873,10 @@ def calculate_jerk(accel, acceleration_log, jerk_log):
         jerk_log.append(jerk)
     return acceleration_log, jerk_log
 
+
+
+
+
 def game_loop(settings):
     """
     Main loop of the simulation. It handles updating all the HUD information,
@@ -881,15 +910,23 @@ def game_loop(settings):
 
         if settings[scenario]['EGO_AGENT'] == "Basic":
             agent = BasicAgent(world.ego_vehicle, settings[scenario]['EGO_SPEED'])
-            agent.follow_speed_limits(True)
+            agent.follow_speed_limits(False)
+            agent.ignore_traffic_lights(active=True)
         elif settings[scenario]['EGO_AGENT'] == "Constant":
-            agent = ConstantVelocityAgent(world.ego_vehicle, settings[scenario]['EGO_SPEED']+10)
+            agent = ConstantVelocityAgent(world.ego_vehicle, settings[scenario]['EGO_SPEED'])
             ground_loc = world.world.ground_projection(world.ego_vehicle.get_location(), 5)
             if ground_loc:
                 world.ego_vehicle.set_location(ground_loc.location + carla.Location(z=0.01))
-            agent.follow_speed_limits(True)
+            agent.follow_speed_limits(False)
+            agent.ignore_traffic_lights(active=True)
         elif settings[scenario]['EGO_AGENT'] == "Behavior":
-            agent = BehaviorAgent(world.ego_vehicle, behavior="cautious") #normal,aggressive , cautious
+            agent = BehaviorAgent(world.ego_vehicle, behavior="normal") #normal,aggressive , cautious
+            agent.set_target_speed(settings[scenario]['EGO_SPEED'])
+            agent._behavior.max_speed = settings[scenario]['EGO_SPEED']
+            #agent.follow_speed_limits(True)
+            #agent.ignore_traffic_lights(active=True)
+            #agent.ignore_stop_signs(active=True)
+            #agent.ignore_vehicles(active=True)
 
 
         camera_bp = sim_world.get_blueprint_library().find('sensor.camera.rgb') 
@@ -914,6 +951,7 @@ def game_loop(settings):
                               'peak-jerk': None}
         acceleration_log = []
         jerk_log=[]
+
         
         clock = pygame.time.Clock()
 
@@ -953,7 +991,7 @@ def game_loop(settings):
             
 
             control = agent.run_step()
-            #control.manual_gear_shift = False
+            control.manual_gear_shift = False
             world.ego_vehicle.apply_control(control)
 
             # CALCULATE THE REACTION TIME
@@ -1002,7 +1040,8 @@ def game_loop(settings):
             if occ_veh_speed < settings[scenario]['VEL_TO_WALKER_START'] and value_control_ped:
                 
                 walker_control = carla.WalkerControl()
-                walker_control.direction = carla.Vector3D(-1.0, 0.0, 0.0) 
+                walker_direction = settings[scenario]['WALKER_DIRECTION']
+                walker_control.direction = carla.Vector3D(walker_direction[0], walker_direction[1], walker_direction[2]) 
                 walker_control.speed = settings[scenario]['WALKER_SPEED']
                 world.pedestrian.apply_control(walker_control)
 
