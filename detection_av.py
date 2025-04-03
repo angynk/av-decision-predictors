@@ -25,6 +25,8 @@ import weakref
 import yaml
 import cv2
 from yaml.loader import SafeLoader
+import gc
+import torch
 
 from occlusion_predictor import OcclusionPredictor
 from ultralytics import YOLO
@@ -76,6 +78,7 @@ from agents.navigation.global_route_planner import GlobalRoutePlanner
 # ==============================================================================
 
 
+
 def find_weather_presets():
     """Method to find weather presets"""
     rgx = re.compile('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)')
@@ -125,7 +128,7 @@ class CustomAgent():
         self.safe_deceleration = self.settings['ENHANCED_VEH']['SAFE_DECELERATING']   # Maximum comfortable deceleration (m/s²)
         self.safe_distance_margin = self.settings['ENHANCED_VEH']['SAFE_DISTANCE_MARGIN']   # Extra safe stopping distance (meters)
         self.k_risk = self.settings['ENHANCED_VEH']['OCCLUSION_SENSITIVY']   # Occlusion sensitivity factor
-        self.occlusion_predictor = OcclusionPredictor(model_conf)
+        #self.occlusion_predictor = OcclusionPredictor(model_conf)
         self.scenario = self.settings['SCENARIO'] 
         self.prev_speed = 0.0  # Previous speed in m/s
         self.prev_time = time.time()  # Previous timestamp
@@ -257,8 +260,7 @@ class CustomAgent():
                     for box in result.boxes:
                         cls = int(box.cls[0])  # Class index
                         confidence = box.conf[0].item()
-
-                        if cls == 0 and confidence > 0.60:  # Class 0 = Person in COCO dataset
+                        if cls == 0 and confidence > 0.70:  # Class 0 = Person in COCO dataset
                             detected_pedestrian = True
                             x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
                             image_data = np.ascontiguousarray(image_data, dtype=np.uint8)
@@ -1144,6 +1146,10 @@ def game_loop(settings, conf_model):
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().y - settings[scenario]['OCC_DIS_CROSS']
                 value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']    
                 value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
+            elif settings[scenario]['AXIS'] == 'X2':
+                distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
+                value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']
+                value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
             else:
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
                 value_control_oclu = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_CONTROL_OCC']
@@ -1226,8 +1232,8 @@ def game_loop(settings, conf_model):
             sett.fixed_delta_seconds = None
             world.world.apply_settings(sett)
             traffic_manager.set_synchronous_mode(True)
-            experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
-            experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
+            #experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
+            #experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
             print(experiment_results)
 
             if settings['SAVE_IMAGES']:
@@ -1244,6 +1250,13 @@ def game_loop(settings, conf_model):
 
 
 def main():
+
+    gc.collect()
+    #torch.cuda.empty_cache()
+    torch.cuda.empty_cache()  # Clears unused memory
+    torch.cuda.memory_allocated()  # Shows allocated memory
+    torch.cuda.memory_reserved() 
+
     with open('scenarios.yaml') as f:
         settings = yaml.load(f, Loader=SafeLoader)
 

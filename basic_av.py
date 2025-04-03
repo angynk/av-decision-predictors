@@ -168,11 +168,12 @@ class World(object):
 
         # EGO VEHICLE DEFINITION
         spawn_points = self.map.get_spawn_points()
-        #spawn_point_ego_veh = random.choice(spawn_points) if spawn_points else carla.Transform()
-        #print(spawn_point_ego_veh) #(x=131.690018, y=109.400040, z=0.500000)
+        spawn_point_ego_veh = random.choice(spawn_points) if spawn_points else carla.Transform()
+        print(spawn_point_ego_veh) #(x=131.690018, y=109.400040, z=0.500000)
         spawn_point_ego_veh = carla.Transform(carla.Location(x=settings[scenario]['EGO_X'], y=settings[scenario]['EGO_Y'], z=settings[scenario]['EGO_Z']), carla.Rotation(yaw=settings[scenario]['EGO_YAW']))
-        self.ego_vehicle = self.world.try_spawn_actor(blueprint, spawn_point_ego_veh)
-        self.ego_vehicle.set_autopilot(True)            
+        #spawn_point_ego_veh = carla.Transform(carla.Location(x=-232.819733, y=140.668808, z=155.685013), carla.Rotation(yaw=-170))
+        self.ego_vehicle = self.world.try_spawn_actor(blueprint,  spawn_point_ego_veh)
+        #self.ego_vehicle.set_autopilot(True)            
         self.modify_vehicle_physics(self.ego_vehicle)
             
         waypoint = self.map.get_waypoint(self.ego_vehicle.get_location(), project_to_road=False, lane_type=carla.LaneType.Sidewalk)
@@ -923,11 +924,10 @@ def game_loop(settings):
             agent = BehaviorAgent(world.ego_vehicle, behavior="normal") #normal,aggressive , cautious
             agent.set_target_speed(settings[scenario]['EGO_SPEED'])
             agent._behavior.max_speed = settings[scenario]['EGO_SPEED']
-            #agent.follow_speed_limits(True)
-            #agent.ignore_traffic_lights(active=True)
-            #agent.ignore_stop_signs(active=True)
-            #agent.ignore_vehicles(active=True)
+            agent.ignore_traffic_lights(active=True)
 
+        #agent.set_destination( carla.Location(x=settings[scenario]['EGO_X'], y=settings[scenario]['WALKER_Y'], z=settings[scenario]['EGO_Z']))
+        
 
         camera_bp = sim_world.get_blueprint_library().find('sensor.camera.rgb') 
         camera_bp.set_attribute('image_size_x', '1920')
@@ -964,13 +964,19 @@ def game_loop(settings):
             world.tick(clock)
             world.render(display)
             pygame.display.flip()
-
+            #print(world.ego_vehicle.get_location())
             v_2 = world.occ_vehicle.get_velocity()
             occ_veh_speed = 3.6*math.sqrt(v_2.x**2 + v_2.y**2 +v_2.z**2)
 
             if settings[scenario]['AXIS'] == 'Y':
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().y - settings[scenario]['OCC_DIS_CROSS']
+                print(distance_to_cross_occ_veh)
                 value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']    
+                value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
+            elif settings[scenario]['AXIS'] == 'X2':
+                distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
+                
+                value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']
                 value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
             else:
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
@@ -993,6 +999,7 @@ def game_loop(settings):
             control = agent.run_step()
             control.manual_gear_shift = False
             world.ego_vehicle.apply_control(control)
+            
 
             # CALCULATE THE REACTION TIME
             #Euro NCAP and NHTSA safety tests consider 20–30 meters as a typical range for pedestrian detection and emergency braking at urban speeds
@@ -1038,7 +1045,6 @@ def game_loop(settings):
             #print("D:"+ str(distance_to_cross_occ_veh)+" - V:"+str(occ_veh_speed))
                 
             if occ_veh_speed < settings[scenario]['VEL_TO_WALKER_START'] and value_control_ped:
-                
                 walker_control = carla.WalkerControl()
                 walker_direction = settings[scenario]['WALKER_DIRECTION']
                 walker_control.direction = carla.Vector3D(walker_direction[0], walker_direction[1], walker_direction[2]) 
@@ -1058,8 +1064,8 @@ def game_loop(settings):
             sett.fixed_delta_seconds = None
             world.world.apply_settings(sett)
             traffic_manager.set_synchronous_mode(True)
-            experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
-            experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
+            #experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
+            #experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
             print(experiment_results)
 
             if settings['SAVE_IMAGES']:

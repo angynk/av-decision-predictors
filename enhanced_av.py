@@ -1205,6 +1205,10 @@ def game_loop(settings, conf_model):
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().y - settings[scenario]['OCC_DIS_CROSS']
                 value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']    
                 value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
+            elif settings[scenario]['AXIS'] == 'X2':
+                distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
+                value_control_oclu = distance_to_cross_occ_veh > settings[scenario]['DIS_TO_CONTROL_OCC']
+                value_control_ped = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_WALKER_START']
             else:
                 distance_to_cross_occ_veh = world.occ_vehicle.get_location().x - settings[scenario]['OCC_DIS_CROSS']
                 value_control_oclu = distance_to_cross_occ_veh < settings[scenario]['DIS_TO_CONTROL_OCC']
@@ -1286,8 +1290,8 @@ def game_loop(settings, conf_model):
             sett.fixed_delta_seconds = None
             world.world.apply_settings(sett)
             traffic_manager.set_synchronous_mode(True)
-            experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
-            experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
+            #experiment_results['avg-jerk'] =np.mean(np.abs(jerk_log))
+            #experiment_results['peak-jerk'] = np.max(np.abs(jerk_log))
             print(experiment_results)
 
             if settings['SAVE_IMAGES']:
