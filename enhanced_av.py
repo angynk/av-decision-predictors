@@ -176,7 +176,7 @@ class CustomAgent(BasicAgent):
         #return speed * (1 - self.k_risk * occlusion_prob)
         if distance <= 0:
             #raise ValueError("Distance must be greater than 0")
-            return speed
+            return -2, speed
 
         if speed**2 < 2 * abs(vf**2) / distance:
             raise ValueError("Deceleration too high for the given distance")
@@ -1224,7 +1224,7 @@ def game_loop(settings, conf_model):
                                                         brake=min(1.0, (occ_veh_speed/3.6 - (settings[scenario]['OCC_SPEED'] + 0.78)/3.6) * 2.0)) )
             else:
                 world.occ_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0,
-                                                    brake=0.64, gear = 0, manual_gear_shift = 1))
+                                                    brake=settings['DECELERATION'], gear = 0, manual_gear_shift = 1))
 
             control, ped_cross, ttc_anticipation = agent.run_step(world.pedestrian, world.occ_vehicle, ped_cross)
             #control.manual_gear_shift = False
